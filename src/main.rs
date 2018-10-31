@@ -1,3 +1,7 @@
+extern crate cgmath;
+extern crate direction;
+extern crate grid_2d;
+
 use cgmath::{vec2, vec3, Matrix4, Vector2, Vector3};
 use direction::{CardinalDirection, OrdinalDirection, OrdinalDirections};
 use grid_2d::{Coord, Grid, Size};
@@ -70,17 +74,19 @@ struct RelativeBuffers {
 
 impl RelativeBuffers {
     fn concat(&self, b: &Self) -> Self {
-        let attributes = self
-            .attributes
+        let attributes = self.attributes
             .iter()
             .chain(b.attributes.iter())
             .cloned()
             .collect::<Vec<_>>();
-        let indices = self
-            .indices
+        let indices = self.indices
             .iter()
             .cloned()
-            .chain(b.indices.iter().map(|i| i + self.attributes.len() as u32))
+            .chain(
+                b.indices
+                    .iter()
+                    .map(|i| i + self.attributes.len() as u32),
+            )
             .collect::<Vec<_>>();
         Self {
             attributes,
@@ -208,15 +214,17 @@ fn make_faces(piece: Piece, style: &Style, config: &Config) -> RelativeBuffers {
     });
     let top = edge_base.iter().map(|a| {
         let tex_coord_px = vec2(a.face_tex_offset_px_x, 0.) + style.face_tex_top_left_px;
-        let space_coord_px =
-            vec3(a.space_coord_px.x, style.height_px, a.space_coord_px.y);
+        let space_coord_px = vec3(
+            a.space_coord_px.x,
+            style.height_px,
+            a.space_coord_px.y,
+        );
         Attribute {
             tex_coord_px,
             space_coord_px,
         }
     });
-    let base_top_alternating = base
-        .zip(top)
+    let base_top_alternating = base.zip(top)
         .flat_map(|(base, top)| vec![base, top])
         .collect::<Vec<_>>();
 
@@ -266,8 +274,11 @@ fn make_top(piece: Piece, style: &Style, config: &Config) -> RelativeBuffers {
     let attributes = attributes
         .iter()
         .map(|a| {
-            let space_coord_px =
-                vec3(a.space_coord_px.x, style.height_px, a.space_coord_px.y);
+            let space_coord_px = vec3(
+                a.space_coord_px.x,
+                style.height_px,
+                a.space_coord_px.y,
+            );
             let tex_coord_px = a.tex_offset_px + style.top_tex_top_left_px;
             Attribute {
                 space_coord_px,
@@ -349,12 +360,10 @@ impl Quarter {
         direction: OrdinalDirection,
     ) -> Self {
         let (card_a, card_b) = direction.to_cardinals();
-        let cell_type_a = grid
-            .get(coord + card_a.coord())
+        let cell_type_a = grid.get(coord + card_a.coord())
             .cloned()
             .unwrap_or(CellType::Floor);
-        let cell_type_b = grid
-            .get(coord + card_b.coord())
+        let cell_type_b = grid.get(coord + card_b.coord())
             .cloned()
             .unwrap_or(CellType::Floor);
         let piece = Piece::choose((cell_type_a, card_a), (cell_type_b, card_b));
@@ -424,8 +433,9 @@ fn main() {
             _ => panic!("unknown char"),
         }
     });
-    let detail_grid =
-        Grid::new_from_fn(size, |coord| CellDetails::from_grid(&type_grid, coord));
+    let detail_grid = Grid::new_from_fn(size, |coord| {
+        CellDetails::from_grid(&type_grid, coord)
+    });
 
     let style = Style {
         width_px: 8.,
@@ -434,7 +444,9 @@ fn main() {
         top_tex_top_left_px: vec2(0., 0.),
     };
 
-    let config = Config { cell_size_px: 16. };
+    let config = Config {
+        cell_size_px: 16.,
+    };
 
     let geometry_iter = detail_grid
         .enumerate()
