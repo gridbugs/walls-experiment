@@ -10,8 +10,9 @@ extern crate image;
 
 use cgmath::{vec2, vec3, InnerSpace, Matrix4, Vector2, Vector3};
 use direction::{CardinalDirection, OrdinalDirection, OrdinalDirections};
+use gfx::state::{CullFace, FrontFace, Rasterizer};
 use gfx::traits::FactoryExt;
-use gfx::{texture, Device, Factory};
+use gfx::{texture, Device, Factory, Primitive};
 use glutin::GlContext;
 use grid_2d::{Coord, Grid, Size};
 
@@ -65,6 +66,7 @@ enum CellType {
 
 struct Config {
     cell_size_px: f32,
+    tex_top_piece_size: f32,
 }
 
 struct Style {
@@ -87,7 +89,7 @@ struct TopAttribute {
 impl TopAttribute {
     fn new(piece_tex_offset_px: Vector2<f32>, space_coord_px: Vector2<f32>) -> Self {
         let tex_offset_px =
-            piece_tex_offset_px + vec2(space_coord_px.x, -space_coord_px.y);
+            piece_tex_offset_px + vec2(space_coord_px.x, space_coord_px.y);
         Self {
             tex_offset_px,
             space_coord_px,
@@ -166,14 +168,14 @@ fn make_edge_base(
     style: &Style,
     config: &Config,
 ) -> (Vec<BaseAttribute>, &'static [u32]) {
-    let s = config.cell_size_px;
+    let s = config.cell_size_px / 2.;
     let w = style.width_px;
     match piece {
         Piece::Inner => (
             vec![
                 BaseAttribute {
-                    face_tex_offset_px_x: 0.,
-                    space_coord_px: vec2(s, w),
+                    face_tex_offset_px_x: 2. * (s - w),
+                    space_coord_px: vec2(w, s),
                 },
                 BaseAttribute {
                     // XXX this will produce artifacts where an inner or outer
@@ -182,8 +184,8 @@ fn make_edge_base(
                     space_coord_px: vec2(w, w),
                 },
                 BaseAttribute {
-                    face_tex_offset_px_x: 2. * (s - w),
-                    space_coord_px: vec2(w, s),
+                    face_tex_offset_px_x: 0.,
+                    space_coord_px: vec2(s, w),
                 },
             ],
             BASE_TOP_ALTERNATING_INDICES_2,
@@ -191,7 +193,7 @@ fn make_edge_base(
         Piece::Outer => (
             vec![
                 BaseAttribute {
-                    face_tex_offset_px_x: 0.,
+                    face_tex_offset_px_x: 2. * w,
                     space_coord_px: vec2(0., w),
                 },
                 BaseAttribute {
@@ -199,8 +201,8 @@ fn make_edge_base(
                     space_coord_px: vec2(w, w),
                 },
                 BaseAttribute {
-                    face_tex_offset_px_x: 2. * w,
-                    space_coord_px: vec2(0., w),
+                    face_tex_offset_px_x: 0.,
+                    space_coord_px: vec2(w, 0.),
                 },
             ],
             BASE_TOP_ALTERNATING_INDICES_2,
@@ -208,12 +210,12 @@ fn make_edge_base(
         Piece::Left => (
             vec![
                 BaseAttribute {
-                    face_tex_offset_px_x: 0.,
-                    space_coord_px: vec2(s, w),
+                    face_tex_offset_px_x: s,
+                    space_coord_px: vec2(w, s),
                 },
                 BaseAttribute {
-                    face_tex_offset_px_x: s,
-                    space_coord_px: vec2(0., w),
+                    face_tex_offset_px_x: 0.,
+                    space_coord_px: vec2(w, 0.),
                 },
             ],
             BASE_TOP_ALTERNATING_INDICES_1,
@@ -221,12 +223,12 @@ fn make_edge_base(
         Piece::Right => (
             vec![
                 BaseAttribute {
-                    face_tex_offset_px_x: 0.,
-                    space_coord_px: vec2(w, 0.),
+                    face_tex_offset_px_x: s,
+                    space_coord_px: vec2(0., w),
                 },
                 BaseAttribute {
-                    face_tex_offset_px_x: s,
-                    space_coord_px: vec2(w, s),
+                    face_tex_offset_px_x: 0.,
+                    space_coord_px: vec2(s, w),
                 },
             ],
             BASE_TOP_ALTERNATING_INDICES_1,
@@ -272,25 +274,25 @@ fn make_rect_top(
     const INDICES: &[u32] = &[0, 1, 2, 0, 2, 3];
     let attributes = vec![
         TopAttribute::new(piece_tex_offset_px, vec2(0., 0.)),
-        TopAttribute::new(piece_tex_offset_px, vec2(0., size.y)),
-        TopAttribute::new(piece_tex_offset_px, size),
         TopAttribute::new(piece_tex_offset_px, vec2(size.x, 0.)),
+        TopAttribute::new(piece_tex_offset_px, size),
+        TopAttribute::new(piece_tex_offset_px, vec2(0., size.y)),
     ];
     (attributes, INDICES)
 }
 
 fn make_top(piece: Piece, style: &Style, config: &Config) -> RelativeBuffers {
-    let s = config.cell_size_px;
+    let s = config.tex_top_piece_size;
     let w = style.width_px;
     let (attributes, indices) = match piece {
         Piece::Inner => {
-            const INDICES: &[u32] = &[0, 1, 2, 0, 2, 3, 2, 4, 3, 2, 5, 4];
-            let piece_tex_offset_px = vec2(s, s);
+            const INDICES: &[u32] = &[0, 1, 2, 0, 2, 3, 0, 3, 4, 0, 4, 5];
+            let piece_tex_offset_px = vec2(0., 0.);
             (
                 vec![
-                    TopAttribute::new(piece_tex_offset_px, vec2(0., s)),
-                    TopAttribute::new(piece_tex_offset_px, vec2(w, s)),
                     TopAttribute::new(piece_tex_offset_px, vec2(w, w)),
+                    TopAttribute::new(piece_tex_offset_px, vec2(w, s)),
+                    TopAttribute::new(piece_tex_offset_px, vec2(0., s)),
                     TopAttribute::new(piece_tex_offset_px, vec2(0., 0.)),
                     TopAttribute::new(piece_tex_offset_px, vec2(s, 0.)),
                     TopAttribute::new(piece_tex_offset_px, vec2(s, w)),
@@ -298,9 +300,9 @@ fn make_top(piece: Piece, style: &Style, config: &Config) -> RelativeBuffers {
                 INDICES,
             )
         }
-        Piece::Outer => make_rect_top(vec2(w, w), vec2(0., 2. * s)),
-        Piece::Left => make_rect_top(vec2(s, w), vec2(s, 2. * s)),
-        Piece::Right => make_rect_top(vec2(w, s), vec2(0., s)),
+        Piece::Outer => make_rect_top(vec2(w, w), vec2(2. * s, 0.)),
+        Piece::Left => make_rect_top(vec2(w, s), vec2(0., s)),
+        Piece::Right => make_rect_top(vec2(s, w), vec2(s, 0.)),
     };
     let attributes = attributes
         .iter()
@@ -336,10 +338,10 @@ fn move_to_cell_centre(coord: Coord, config: &Config) -> Matrix4<f32> {
 
 fn rotate_to_direction(direction: OrdinalDirection) -> Matrix4<f32> {
     let angle = match direction {
-        OrdinalDirection::NorthEast => 0.,
-        OrdinalDirection::SouthEast => ::std::f32::consts::PI / 2.,
-        OrdinalDirection::SouthWest => ::std::f32::consts::PI,
-        OrdinalDirection::NorthWest => -::std::f32::consts::PI / 2.,
+        OrdinalDirection::NorthEast => ::std::f32::consts::PI / 2.,
+        OrdinalDirection::SouthEast => 0.,
+        OrdinalDirection::SouthWest => -::std::f32::consts::PI / 2.,
+        OrdinalDirection::NorthWest => ::std::f32::consts::PI,
     };
     Matrix4::from_angle_y(cgmath::Rad(angle))
 }
@@ -493,10 +495,25 @@ fn main() {
     let mut encoder: gfx::Encoder<_, gfx_device_gl::CommandBuffer> =
         factory.create_command_buffer().into();
 
-    let pso = factory
-        .create_pipeline_simple(
+    let shader_set = factory
+        .create_shader_set(
             include_bytes!("shaders/shader.150.vert"),
             include_bytes!("shaders/shader.150.frag"),
+        )
+        .unwrap();
+
+    let rasterizer = {
+        let mut rasterizer = Rasterizer::new_fill();
+        rasterizer.front_face = FrontFace::Clockwise;
+        rasterizer.cull_face = CullFace::Back;
+        rasterizer
+    };
+
+    let pso = factory
+        .create_pipeline_state(
+            &shader_set,
+            Primitive::TriangleList,
+            rasterizer,
             pipe::new(),
         )
         .unwrap();
@@ -522,7 +539,7 @@ fn main() {
     ));
 
     let mut camera = Camera {
-        position: vec3(0., 200., 0.),
+        position: vec3(50., 200., 100.),
         aspect_ratio: (width / height) as f32,
     };
 
@@ -551,11 +568,14 @@ fn main() {
     let style = Style {
         width_px: 8.,
         height_px: 32.,
-        face_tex_top_left_px: vec2(32., 0.),
-        top_tex_top_left_px: vec2(0., 0.),
+        face_tex_top_left_px: vec2(64., 16.),
+        top_tex_top_left_px: vec2(16., 16.),
     };
 
-    let config = Config { cell_size_px: 16. };
+    let config = Config {
+        cell_size_px: 32.,
+        tex_top_piece_size: 16.,
+    };
 
     let geometry_iter = detail_grid
         .enumerate()
@@ -670,7 +690,7 @@ fn main() {
                                 glutin::VirtualKeyCode::A => {
                                     camera_move.y = 0.;
                                 }
-                                glutin::VirtualKeyCode::S => {
+                                glutin::VirtualKeyCode::S | glutin::VirtualKeyCode::O => {
                                     camera_move.y = 0.;
                                 }
                                 _ => (),
