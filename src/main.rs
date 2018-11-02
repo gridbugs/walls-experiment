@@ -1,10 +1,45 @@
 extern crate cgmath;
 extern crate direction;
 extern crate grid_2d;
+#[macro_use]
+extern crate gfx;
+extern crate gfx_device_gl;
+extern crate gfx_window_glutin;
+extern crate glutin;
+extern crate image;
 
-use cgmath::{vec2, vec3, Matrix4, Vector2, Vector3};
+use cgmath::{vec2, vec3, InnerSpace, Matrix4, Vector2, Vector3};
 use direction::{CardinalDirection, OrdinalDirection, OrdinalDirections};
+use gfx::traits::FactoryExt;
+use gfx::{texture, Device, Factory};
+use glutin::GlContext;
 use grid_2d::{Coord, Grid, Size};
+
+type ColourFormat = gfx::format::Srgba8;
+type DepthFormat = gfx::format::DepthStencil;
+
+gfx_vertex_struct!(Vertex {
+    pos: [f32; 3] = "a_Pos",
+    tex_coord: [f32; 2] = "a_TexCoord",
+});
+
+gfx_constant_struct!(Transform {
+    transform: [[f32; 4]; 4] = "u_Transform",
+});
+
+gfx_constant_struct!(Properties {
+    atlas_dimensions: [f32; 2] = "u_AtlasDimensions",
+});
+
+gfx_pipeline!(pipe {
+    vertex_buffer: gfx::VertexBuffer<Vertex> = (),
+    transform: gfx::ConstantBuffer<Transform> = "Transform",
+    properties: gfx::ConstantBuffer<Properties> = "Properties",
+    texture: gfx::TextureSampler<[f32; 4]> = "t_Texture",
+    out_colour: gfx::BlendTarget<ColourFormat> =
+        ("Target", gfx::state::ColorMask::all(), gfx::preset::blend::ALPHA),
+    out_depth: gfx::DepthTarget<DepthFormat> = gfx::preset::depth::LESS_EQUAL_WRITE,
+});
 
 #[derive(Debug, Clone, Copy)]
 enum CellType {
@@ -74,19 +109,17 @@ struct RelativeBuffers {
 
 impl RelativeBuffers {
     fn concat(&self, b: &Self) -> Self {
-        let attributes = self.attributes
+        let attributes = self
+            .attributes
             .iter()
             .chain(b.attributes.iter())
             .cloned()
             .collect::<Vec<_>>();
-        let indices = self.indices
+        let indices = self
+            .indices
             .iter()
             .cloned()
-            .chain(
-                b.indices
-                    .iter()
-                    .map(|i| i + self.attributes.len() as u32),
-            )
+            .chain(b.indices.iter().map(|i| i + self.attributes.len() as u32))
             .collect::<Vec<_>>();
         Self {
             attributes,
@@ -214,17 +247,15 @@ fn make_faces(piece: Piece, style: &Style, config: &Config) -> RelativeBuffers {
     });
     let top = edge_base.iter().map(|a| {
         let tex_coord_px = vec2(a.face_tex_offset_px_x, 0.) + style.face_tex_top_left_px;
-        let space_coord_px = vec3(
-            a.space_coord_px.x,
-            style.height_px,
-            a.space_coord_px.y,
-        );
+        let space_coord_px =
+            vec3(a.space_coord_px.x, style.height_px, a.space_coord_px.y);
         Attribute {
             tex_coord_px,
             space_coord_px,
         }
     });
-    let base_top_alternating = base.zip(top)
+    let base_top_alternating = base
+        .zip(top)
         .flat_map(|(base, top)| vec![base, top])
         .collect::<Vec<_>>();
 
@@ -274,11 +305,8 @@ fn make_top(piece: Piece, style: &Style, config: &Config) -> RelativeBuffers {
     let attributes = attributes
         .iter()
         .map(|a| {
-            let space_coord_px = vec3(
-                a.space_coord_px.x,
-                style.height_px,
-                a.space_coord_px.y,
-            );
+            let space_coord_px =
+                vec3(a.space_coord_px.x, style.height_px, a.space_coord_px.y);
             let tex_coord_px = a.tex_offset_px + style.top_tex_top_left_px;
             Attribute {
                 space_coord_px,
@@ -360,10 +388,12 @@ impl Quarter {
         direction: OrdinalDirection,
     ) -> Self {
         let (card_a, card_b) = direction.to_cardinals();
-        let cell_type_a = grid.get(coord + card_a.coord())
+        let cell_type_a = grid
+            .get(coord + card_a.coord())
             .cloned()
             .unwrap_or(CellType::Floor);
-        let cell_type_b = grid.get(coord + card_b.coord())
+        let cell_type_b = grid
+            .get(coord + card_b.coord())
             .cloned()
             .unwrap_or(CellType::Floor);
         let piece = Piece::choose((cell_type_a, card_a), (cell_type_b, card_b));
@@ -413,7 +443,89 @@ impl CellDetails {
     }
 }
 
+struct Camera {
+    position: Vector3<f32>,
+    aspect_ratio: f32,
+}
+
+impl Camera {
+    fn transform(&self) -> Matrix4<f32> {
+        let camera_position = self.position;
+        let camera_orientation = vec3(0., -1., 0.);
+        let camera_translate = Matrix4::from_translation(-camera_position);
+        let camera_target_orientation = vec3(0., 0., -1.);
+        let camera_rotate_axis = camera_orientation.cross(camera_target_orientation);
+        let camera_rotate_angle = camera_orientation.angle(camera_target_orientation);
+        let camera_rotate =
+            Matrix4::from_axis_angle(camera_rotate_axis, camera_rotate_angle);
+        let camera_perspective = cgmath::perspective(
+            cgmath::Rad(::std::f32::consts::PI / 2.),
+            self.aspect_ratio,
+            10.,
+            300.,
+        );
+
+        camera_perspective * camera_rotate * camera_translate
+    }
+}
+
 fn main() {
+    let (width, height) = (960., 720.);
+    let mut events_loop = glutin::EventsLoop::new();
+    let builder = glutin::WindowBuilder::new()
+        .with_title("hello-3d")
+        .with_resizable(true);
+    let builder = {
+        let size = glutin::dpi::LogicalSize::new(width, height);
+        builder
+            .with_dimensions(size)
+            .with_max_dimensions(size)
+            .with_min_dimensions(size)
+            .with_resizable(true)
+    };
+    let context = glutin::ContextBuilder::new().with_vsync(true);
+    let (window, mut device, mut factory, rtv, dsv) = gfx_window_glutin::init::<
+        ColourFormat,
+        DepthFormat,
+    >(
+        builder, context, &events_loop
+    );
+    let mut encoder: gfx::Encoder<_, gfx_device_gl::CommandBuffer> =
+        factory.create_command_buffer().into();
+
+    let pso = factory
+        .create_pipeline_simple(
+            include_bytes!("shaders/shader.150.vert"),
+            include_bytes!("shaders/shader.150.frag"),
+            pipe::new(),
+        )
+        .unwrap();
+
+    let atlas = image::load_from_memory(include_bytes!("images/atlas.png"))
+        .expect("Failed to decode test pattern")
+        .to_rgba();
+
+    let (atlas_width, atlas_height) = atlas.dimensions();
+    let tex_kind = texture::Kind::D2(
+        atlas_width as u16,
+        atlas_height as u16,
+        texture::AaMode::Single,
+    );
+    let tex_mipmap = texture::Mipmap::Allocated;
+    let (_, texture_srv) = factory
+        .create_texture_immutable_u8::<ColourFormat>(tex_kind, tex_mipmap, &[&atlas])
+        .expect("Failed to create texture");
+
+    let sampler = factory.create_sampler(texture::SamplerInfo::new(
+        texture::FilterMethod::Scale,
+        texture::WrapMode::Tile,
+    ));
+
+    let mut camera = Camera {
+        position: vec3(0., 200., 0.),
+        aspect_ratio: (width / height) as f32,
+    };
+
     let terrain_vecs = include_str!("terrain_strings.txt")
         .split("\n")
         .filter(|s| !s.is_empty())
@@ -433,9 +545,8 @@ fn main() {
             _ => panic!("unknown char"),
         }
     });
-    let detail_grid = Grid::new_from_fn(size, |coord| {
-        CellDetails::from_grid(&type_grid, coord)
-    });
+    let detail_grid =
+        Grid::new_from_fn(size, |coord| CellDetails::from_grid(&type_grid, coord));
 
     let style = Style {
         width_px: 8.,
@@ -444,9 +555,7 @@ fn main() {
         top_tex_top_left_px: vec2(0., 0.),
     };
 
-    let config = Config {
-        cell_size_px: 16.,
-    };
+    let config = Config { cell_size_px: 16. };
 
     let geometry_iter = detail_grid
         .enumerate()
@@ -455,5 +564,123 @@ fn main() {
 
     let geometry = RelativeBuffers::concat_all(geometry_iter);
 
-    println!("{:#?}", geometry.attributes);
+    let index_buffer = factory.create_index_buffer(&geometry.indices[..]);
+    let slice = gfx::Slice {
+        start: 0,
+        end: geometry.indices.len() as u32,
+        base_vertex: 0,
+        instances: None,
+        buffer: index_buffer,
+    };
+
+    let vertices = geometry
+        .attributes
+        .iter()
+        .map(|a| Vertex {
+            pos: a.space_coord_px.into(),
+            tex_coord: a.tex_coord_px.into(),
+        })
+        .collect::<Vec<_>>();
+
+    let vertex_buffer = factory.create_vertex_buffer(&vertices[..]);
+
+    let transform = factory.create_constant_buffer(1);
+    let properties = factory.create_constant_buffer(1);
+
+    let data = pipe::Data {
+        vertex_buffer,
+        transform,
+        properties,
+        texture: (texture_srv, sampler),
+        out_colour: rtv,
+        out_depth: dsv,
+    };
+
+    encoder.update_constant_buffer(
+        &data.properties,
+        &Properties {
+            atlas_dimensions: [atlas_width as f32, atlas_height as f32],
+        },
+    );
+
+    let mut camera_move = vec3(0., 0., 0.);
+    let mut running = true;
+    while running {
+        camera.position += camera_move;
+        encoder.clear(&data.out_colour, [0., 0., 0., 1.]);
+        encoder.clear_depth(&data.out_depth, 1.);
+        let camera_transform = camera.transform();
+
+        encoder.update_constant_buffer(
+            &data.transform,
+            &Transform {
+                transform: camera_transform.into(),
+            },
+        );
+        encoder.draw(&slice, &pso, &data);
+
+        encoder.flush(&mut device);
+        window.swap_buffers().unwrap();
+        device.cleanup();
+
+        events_loop.poll_events(|event| match event {
+            glutin::Event::WindowEvent { event, .. } => match event {
+                glutin::WindowEvent::CloseRequested => {
+                    running = false;
+                }
+                glutin::WindowEvent::KeyboardInput { input, .. } => {
+                    if let Some(virtual_keycode) = input.virtual_keycode {
+                        let step = 1.;
+                        match input.state {
+                            glutin::ElementState::Pressed => match virtual_keycode {
+                                glutin::VirtualKeyCode::Left => {
+                                    camera_move.x = -step;
+                                }
+                                glutin::VirtualKeyCode::Right => {
+                                    camera_move.x = step;
+                                }
+                                glutin::VirtualKeyCode::Up => {
+                                    camera_move.z = -step;
+                                }
+                                glutin::VirtualKeyCode::Down => {
+                                    camera_move.z = step;
+                                }
+                                glutin::VirtualKeyCode::A => {
+                                    camera_move.y = -step;
+                                }
+                                glutin::VirtualKeyCode::S | glutin::VirtualKeyCode::O => {
+                                    camera_move.y = step;
+                                }
+
+                                _ => (),
+                            },
+                            glutin::ElementState::Released => match virtual_keycode {
+                                glutin::VirtualKeyCode::Left => {
+                                    camera_move.x = 0.;
+                                }
+                                glutin::VirtualKeyCode::Right => {
+                                    camera_move.x = 0.;
+                                }
+                                glutin::VirtualKeyCode::Up => {
+                                    camera_move.z = 0.;
+                                }
+                                glutin::VirtualKeyCode::Down => {
+                                    camera_move.z = 0.;
+                                }
+                                glutin::VirtualKeyCode::A => {
+                                    camera_move.y = 0.;
+                                }
+                                glutin::VirtualKeyCode::S => {
+                                    camera_move.y = 0.;
+                                }
+                                _ => (),
+                            },
+                        }
+                    }
+                }
+                _ => (),
+            },
+            _ => (),
+        });
+    }
 }
